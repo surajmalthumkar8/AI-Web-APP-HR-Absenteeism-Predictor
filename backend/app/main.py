@@ -60,7 +60,9 @@ app.add_middleware(
         settings.frontend_url,
         "http://localhost:3000",
         "http://localhost:5173",
+        "https://*.onrender.com",  # Render deployments
     ],
+    allow_origin_regex=r"https://.*\.onrender\.com",  # Allow all Render subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -22,9 +22,12 @@ import type {
   DistributionBucket,
 } from '../types';
 
+// API base URL - uses environment variable in production, proxy in development
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+
 // Create axios instance with base configuration
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },

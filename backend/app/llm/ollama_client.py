@@ -1,19 +1,17 @@
 """
-Ollama LLM Client for generating natural language explanations.
+LLM Client for generating natural language explanations.
 
-Why Ollama:
-- Free and local - no API keys or costs
-- Privacy - data never leaves your machine
-- Flexible - supports multiple open-source models
-- Demonstrates self-hosted LLM deployment skills
+Supports:
+1. Ollama (local) - Primary for local development
+2. Hugging Face Inference API (free) - For cloud deployment
 
 Usage:
-    client = OllamaClient()
+    client = get_ollama_client()
     response = await client.generate("Explain this prediction...")
 """
 
 import httpx
-import asyncio
+import os
 from typing import Optional
 
 from app.config import settings
@@ -21,9 +19,8 @@ from app.config import settings
 
 class OllamaClient:
     """
-    Async client for Ollama LLM API.
-
-    Ollama API docs: https://github.com/ollama/ollama/blob/main/docs/api.md
+    Async client for LLM text generation.
+    Tries Ollama first, falls back to Hugging Face Inference API.
     """
 
     def __init__(
@@ -32,17 +29,14 @@ class OllamaClient:
         model: str | None = None,
         timeout: int | None = None,
     ):
-        """
-        Initialize Ollama client.
-
-        Args:
-            base_url: Ollama server URL (default: http://localhost:11434)
-            model: Model name (default: llama3.2)
-            timeout: Request timeout in seconds
-        """
         self.base_url = base_url or settings.ollama_base_url
         self.model = model or settings.ollama_model
         self.timeout = timeout or settings.ollama_timeout
+
+        # Hugging Face settings (free inference API)
+        self.hf_model = "mistralai/Mistral-7B-Instruct-v0.2"
+        self.hf_api_url = f"https://api-inference.huggingface.co/models/{self.hf_model}"
+        self.hf_token = os.environ.get("HF_TOKEN", "")
 
     async def generate(
         self,
@@ -50,90 +44,119 @@ class OllamaClient:
         temperature: float = 0.1,
         max_tokens: int = 300,
     ) -> str:
-        """
-        Generate text completion from Ollama.
+        """Generate text using available LLM provider."""
 
-        Args:
-            prompt: The prompt to send to the model
-            temperature: Controls randomness (0 = deterministic, 1 = creative)
-            max_tokens: Maximum tokens in response
+        # Try Ollama first (local)
+        try:
+            if await self._check_ollama():
+                return await self._generate_ollama(prompt, temperature, max_tokens)
+        except Exception:
+            pass
 
-        Returns:
-            Generated text response
+        # Try Hugging Face Inference API (free, no token required for many models)
+        try:
+            return await self._generate_huggingface(prompt, max_tokens)
+        except Exception:
+            pass
 
-        Raises:
-            OllamaConnectionError: If Ollama server is unreachable
-            OllamaGenerationError: If generation fails
-        """
+        # All failed
+        raise OllamaGenerationError("No LLM provider available")
+
+    async def _check_ollama(self) -> bool:
+        """Quick check if Ollama is running."""
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                return response.status_code == 200
+        except Exception:
+            return False
+
+    async def _generate_ollama(
+        self, prompt: str, temperature: float, max_tokens: int
+    ) -> str:
+        """Generate using local Ollama."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "options": {
-                            "temperature": temperature,
-                            "num_predict": max_tokens,
-                        },
+            response = await client.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
                     },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("response", "").strip()
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("response", "").strip()
 
-            except httpx.ConnectError:
-                raise OllamaConnectionError(
-                    f"Cannot connect to Ollama at {self.base_url}. "
-                    "Ensure Ollama is running: 'ollama serve'"
-                )
-            except httpx.TimeoutException:
-                raise OllamaGenerationError(
-                    f"Ollama request timed out after {self.timeout}s. "
-                    "Try a smaller model or increase timeout."
-                )
-            except httpx.HTTPStatusError as e:
-                raise OllamaGenerationError(f"Ollama API error: {e.response.text}")
+    async def _generate_huggingface(self, prompt: str, max_tokens: int) -> str:
+        """Generate using Hugging Face Inference API (free tier)."""
+        headers = {"Content-Type": "application/json"}
+        if self.hf_token:
+            headers["Authorization"] = f"Bearer {self.hf_token}"
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                self.hf_api_url,
+                headers=headers,
+                json={
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_new_tokens": max_tokens,
+                        "temperature": 0.1,
+                        "return_full_text": False,
+                    },
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # HF returns list of generated texts
+            if isinstance(data, list) and len(data) > 0:
+                return data[0].get("generated_text", "").strip()
+            return ""
 
     async def is_available(self) -> bool:
-        """Check if Ollama server is running and model is available."""
+        """Check if any LLM provider is available."""
+        # Check Ollama
+        if await self._check_ollama():
+            return True
+
+        # Check HF (always available, might be rate limited)
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                # Check server is up
-                response = await client.get(f"{self.base_url}/api/tags")
-                if response.status_code != 200:
-                    return False
-
-                # Check model is installed
-                data = response.json()
-                models = [m.get("name", "") for m in data.get("models", [])]
-
-                # Match model name (ollama uses name:tag format)
-                model_available = any(
-                    self.model in m or m.startswith(self.model)
-                    for m in models
+                response = await client.get(
+                    f"https://api-inference.huggingface.co/models/{self.hf_model}"
                 )
-
-                return model_available
-
+                return response.status_code in [200, 503]  # 503 = loading, still available
         except Exception:
             return False
 
     async def list_models(self) -> list[str]:
-        """List available models on the Ollama server."""
+        """List available models."""
+        models = []
+
+        # Ollama models
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
-                response.raise_for_status()
-                data = response.json()
-                return [m.get("name", "") for m in data.get("models", [])]
+                if response.status_code == 200:
+                    data = response.json()
+                    models.extend([m.get("name", "") for m in data.get("models", [])])
         except Exception:
-            return []
+            pass
+
+        # Add HF model
+        models.append(f"hf:{self.hf_model}")
+
+        return models
 
 
 class OllamaConnectionError(Exception):
-    """Raised when Ollama server is not reachable."""
+    """Raised when LLM server is not reachable."""
     pass
 
 
@@ -147,30 +170,21 @@ _client: Optional[OllamaClient] = None
 
 
 def get_ollama_client() -> OllamaClient:
-    """Get or create the Ollama client singleton."""
+    """Get or create the LLM client singleton."""
     global _client
     if _client is None:
         _client = OllamaClient()
     return _client
 
 
-# Convenience functions for direct use
 async def generate_text(prompt: str, **kwargs) -> str:
-    """Generate text using the default Ollama client."""
+    """Generate text using the default client."""
     client = get_ollama_client()
     return await client.generate(prompt, **kwargs)
 
 
 async def check_ollama_status() -> dict:
-    """
-    Check Ollama server status.
-
-    Returns dict with:
-        - available: bool
-        - models: list of installed models
-        - configured_model: the model we're using
-        - model_ready: whether our model is installed
-    """
+    """Check LLM provider status."""
     client = get_ollama_client()
     available = await client.is_available()
     models = await client.list_models() if available else []
@@ -179,8 +193,5 @@ async def check_ollama_status() -> dict:
         "available": available,
         "models": models,
         "configured_model": client.model,
-        "model_ready": available and any(
-            client.model in m or m.startswith(client.model)
-            for m in models
-        ),
+        "model_ready": available,
     }
