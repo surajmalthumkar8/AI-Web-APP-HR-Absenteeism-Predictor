@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, UseFormRegister } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
@@ -75,10 +75,10 @@ function RiskBadge({ level }: { level: RiskLevel }) {
 // Form field component
 interface FormFieldProps {
   label: string;
-  name: string;
+  name: keyof PredictionInput;
   type?: 'number' | 'select';
   options?: { value: number; label: string }[];
-  register: ReturnType<typeof useForm>['register'];
+  register: UseFormRegister<PredictionInput>;
   error?: string;
   helpText?: string;
 }
