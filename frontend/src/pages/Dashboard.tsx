@@ -17,8 +17,6 @@ import {
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -66,14 +64,6 @@ function StatCard({ title, value, icon, trend, color }: StatCardProps) {
     </div>
   );
 }
-
-// Risk distribution colors
-const RISK_COLORS = {
-  low: '#10b981',
-  medium: '#f59e0b',
-  high: '#ef4444',
-  critical: '#7c3aed',
-};
 
 export default function Dashboard() {
   // Fetch dashboard data

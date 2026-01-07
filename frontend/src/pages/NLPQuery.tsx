@@ -29,7 +29,7 @@ import {
 } from 'recharts';
 import Header from '../components/layout/Header';
 import { processNLPQuery, getQuerySuggestions } from '../api';
-import type { NLPQueryResponse, Employee } from '../types';
+import type { NLPQueryResponse } from '../types';
 
 // Result type icon component
 function ResultTypeIcon({ type }: { type: string }) {
@@ -45,13 +45,26 @@ function ResultTypeIcon({ type }: { type: string }) {
   }
 }
 
-// Table result component
+// Table result component - handles raw DataFrame data with various column names
+interface RawRecord {
+  id?: number;
+  ID?: number;
+  age?: number;
+  Age?: number;
+  service_time?: number;
+  'Service time'?: number;
+  reason_for_absence?: number;
+  'Reason for absence'?: number;
+  absenteeism_hours?: number;
+  'Absenteeism time in hours'?: number;
+}
+
 function TableResult({ data }: { data: unknown[] }) {
   if (!Array.isArray(data) || data.length === 0) {
     return <p className="text-gray-500">No results found.</p>;
   }
 
-  const records = data as Employee[];
+  const records = data as RawRecord[];
   const displayRecords = records.slice(0, 10);
 
   return (
@@ -73,15 +86,15 @@ function TableResult({ data }: { data: unknown[] }) {
                 <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center">
                   <User size={12} className="text-gray-500" />
                 </div>
-                #{record.ID || record.id}
+                #{record.ID ?? record.id ?? '-'}
               </td>
-              <td className="p-3">{record.Age || record.age}</td>
-              <td className="p-3">{record['Service time'] || record.service_time} yrs</td>
+              <td className="p-3">{record.Age ?? record.age ?? '-'}</td>
+              <td className="p-3">{record['Service time'] ?? record.service_time ?? '-'} yrs</td>
               <td className="p-3 text-gray-600">
-                {String(record['Reason for absence'] || record.reason_for_absence)}
+                {String(record['Reason for absence'] ?? record.reason_for_absence ?? '-')}
               </td>
               <td className="p-3 text-right font-semibold">
-                {record['Absenteeism time in hours'] || record.absenteeism_hours}h
+                {record['Absenteeism time in hours'] ?? record.absenteeism_hours ?? '-'}h
               </td>
             </tr>
           ))}
@@ -110,7 +123,23 @@ function MetricResult({ data }: { data: { label: string; value: number; sample_s
 }
 
 // Chart result component
-function ChartResult({ data }: { data: { type: string; data?: unknown[]; groups?: Record<string, number> } }) {
+interface ChartDataInput {
+  type: string;
+  data?: unknown[];
+  groups?: Record<string, number>;
+}
+
+interface TrendDataPoint {
+  period: string;
+  mean: number;
+}
+
+interface ComparisonData {
+  type: string;
+  data: Record<string, { mean: number }>;
+}
+
+function ChartResult({ data }: { data: ChartDataInput }) {
   let chartData: Array<{ name: string; value: number }> = [];
 
   if (data.type === 'grouped' && data.groups) {
@@ -119,16 +148,18 @@ function ChartResult({ data }: { data: { type: string; data?: unknown[]; groups?
       value: Number(value),
     }));
   } else if (data.type === 'trend' && Array.isArray(data.data)) {
-    chartData = data.data.map((d: { period: string; mean: number }) => ({
+    chartData = (data.data as TrendDataPoint[]).map((d) => ({
       name: d.period,
       value: d.mean,
     }));
-  } else if (data.type === 'comparison' && (data as { data?: Record<string, { mean: number }> }).data) {
-    const compData = data as { data: Record<string, { mean: number }> };
-    chartData = Object.entries(compData.data).map(([name, stats]) => ({
-      name: String(name),
-      value: stats.mean,
-    }));
+  } else if (data.type === 'comparison') {
+    const compData = data as unknown as ComparisonData;
+    if (compData.data && typeof compData.data === 'object') {
+      chartData = Object.entries(compData.data).map(([name, stats]) => ({
+        name: String(name),
+        value: stats.mean,
+      }));
+    }
   }
 
   if (chartData.length === 0) {
@@ -188,7 +219,7 @@ export default function NLPQuery() {
       case 'metric':
         return <MetricResult data={response.data as { label: string; value: number; sample_size?: number }} />;
       case 'chart_data':
-        return <ChartResult data={response.data as { type: string; data?: unknown[]; groups?: Record<string, number> }} />;
+        return <ChartResult data={response.data as ChartDataInput} />;
       case 'text':
         return (
           <p className="text-gray-700 leading-relaxed">
