@@ -125,13 +125,24 @@ class OllamaClient:
         if await self._check_ollama():
             return True
 
-        # Check HF (always available, might be rate limited)
+        # Check HF - if we have a token, consider it available
+        # The HF Inference API is serverless and always "available" with a valid token
+        if self.hf_token:
+            return True
+
+        # Without token, try to check HF API status
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            headers = {}
+            if self.hf_token:
+                headers["Authorization"] = f"Bearer {self.hf_token}"
+
+            async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(
-                    f"https://api-inference.huggingface.co/models/{self.hf_model}"
+                    f"https://api-inference.huggingface.co/models/{self.hf_model}",
+                    headers=headers,
                 )
-                return response.status_code in [200, 503]  # 503 = loading, still available
+                # 200 = ready, 503 = loading (still available), 401/403 = auth issue
+                return response.status_code in [200, 503]
         except Exception:
             return False
 
